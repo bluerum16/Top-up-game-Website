@@ -40,16 +40,18 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: topup_frontend
-    restart: unless-stopped
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - NEXT_PUBLIC_API_URL=http://backend:8080
-      - NEXT_PUBLIC_MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
-      - NEXT_PUBLIC_MIDTRANS_ENV=${MIDTRANS_ENV}
-    depends_on:
-      - backend
+    volumes:
+      - ./frontend:/app  # Mount kode lokal
+      - /app/node_modules # Pastikan node_modules di container, bukan di host
+    ports:
+      - "3000:3000"
     networks:
       - topup_net
+    depends_on:
+      - backend
 
   # ─────────────────────────────────────────
   # DASHBOARD — Next.js Admin Dashboard
@@ -189,6 +191,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - topup_net
+    
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: topup_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"   # akses browser di http://localhost:5050
+    depends_on:
+      - postgres_main
     networks:
       - topup_net
 

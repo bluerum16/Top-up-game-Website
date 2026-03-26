@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════
 # Stage 1: Builder
 # ════════════════════════════════════════════
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata make
 
@@ -30,26 +30,21 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # ════════════════════════════════════════════
 FROM alpine:3.19
 
-# ca-certificates → untuk HTTPS calls ke Midtrans, publisher API
-# tzdata          → untuk timezone Jakarta di logging & cron
 RUN apk --no-cache add ca-certificates tzdata wget && \
     cp /usr/share/zoneinfo/Asia/Jakarta /etc/localtime && \
     echo "Asia/Jakarta" > /etc/timezone
 
-# Jalankan sebagai non-root user (best practice keamanan)
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-# Copy hanya binary dari builder stage
 COPY --from=builder /app/bin/main .
-RUN chown appuser:appgroup /app/main
+RUN chown appuser:appgroup /app/main && chmod +x /app/main
 
 USER appuser
 
 EXPOSE 8080
 
-# Healthcheck → Docker & docker-compose tahu service sudah siap
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD wget -qO- http://localhost:8080/health || exit 1
 
