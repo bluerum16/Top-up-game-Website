@@ -41,6 +41,10 @@ Schema dirancang untuk skala produksi dengan 37 tabel, partisi untuk tabel ML be
 | Payment | Midtrans Snap (sandbox & production) |
 | Publisher | Direct API / Aggregator (Digiflazz, UniPin, dll) |
 | ML Pipeline | External (Python/Spark) — data disimpan di DB |
+| Backend | GO/GIN |
+| Frontend | NextJs |
+| Environtment | Docker |
+| Hosting | VPS |
 
 ---
 
