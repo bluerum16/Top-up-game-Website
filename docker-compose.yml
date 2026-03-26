@@ -1,0 +1,265 @@
+version: "3.9"
+
+networks:
+  topup_net:
+    driver: bridge
+
+volumes:
+  pg_main_data:
+  pg_dashboard_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+
+services:
+
+  # ─────────────────────────────────────────
+  # NGINX — Reverse Proxy + SSL Termination
+  # ─────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: topup_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+      - dashboard
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # FRONTEND — Next.js (User-facing)
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: topup_frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://backend:8080
+      - NEXT_PUBLIC_MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
+      - NEXT_PUBLIC_MIDTRANS_ENV=${MIDTRANS_ENV}
+    depends_on:
+      - backend
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # DASHBOARD — Next.js Admin Dashboard
+  # ─────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: topup_dashboard
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://backend:8080
+      - NEXT_PUBLIC_DASHBOARD_DB_URL=http://backend:8080/dashboard
+    depends_on:
+      - backend
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # BACKEND — Golang + Gin
+  # ─────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: topup_backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Main DB
+      - DB_MAIN_HOST=postgres_main
+      - DB_MAIN_PORT=5432
+      - DB_MAIN_NAME=${POSTGRES_MAIN_DB}
+      - DB_MAIN_USER=${POSTGRES_MAIN_USER}
+      - DB_MAIN_PASS=${POSTGRES_MAIN_PASS}
+      # Dashboard DB
+      - DB_DASH_HOST=postgres_dashboard
+      - DB_DASH_PORT=5432
+      - DB_DASH_NAME=${POSTGRES_DASH_DB}
+      - DB_DASH_USER=${POSTGRES_DASH_USER}
+      - DB_DASH_PASS=${POSTGRES_DASH_PASS}
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASS=${REDIS_PASS}
+      # Kafka
+      - KAFKA_BROKERS=kafka:9092
+      # Midtrans
+      - MIDTRANS_ENV=${MIDTRANS_ENV}
+      - MIDTRANS_SERVER_KEY=${MIDTRANS_SERVER_KEY}
+      - MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
+      # App
+      - JWT_SECRET=${JWT_SECRET}
+      - APP_ENV=${APP_ENV}
+      - PUBLISHER_ENV=${PUBLISHER_ENV}
+    depends_on:
+      postgres_main:
+        condition: service_healthy
+      postgres_dashboard:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # ML SERVICE — Python + FastAPI
+  # ─────────────────────────────────────────
+  ml_service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: topup_ml
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_MAIN_HOST=postgres_main
+      - DB_MAIN_PORT=5432
+      - DB_MAIN_NAME=${POSTGRES_MAIN_DB}
+      - DB_MAIN_USER=${POSTGRES_MAIN_USER}
+      - DB_MAIN_PASS=${POSTGRES_MAIN_PASS}
+      - KAFKA_BROKERS=kafka:9092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASS=${REDIS_PASS}
+    depends_on:
+      postgres_main:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # POSTGRESQL — Database Utama
+  # ─────────────────────────────────────────
+  postgres_main:
+    image: postgres:15-alpine
+    container_name: topup_pg_main
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_MAIN_DB}
+      - POSTGRES_USER=${POSTGRES_MAIN_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_MAIN_PASS}
+    volumes:
+      - pg_main_data:/var/lib/postgresql/data
+      - ./db/main/init.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_MAIN_USER} -d ${POSTGRES_MAIN_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # POSTGRESQL — Database Dashboard
+  # ─────────────────────────────────────────
+  postgres_dashboard:
+    image: postgres:15-alpine
+    container_name: topup_pg_dashboard
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DASH_DB}
+      - POSTGRES_USER=${POSTGRES_DASH_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_DASH_PASS}
+    volumes:
+      - pg_dashboard_data:/var/lib/postgresql/data
+      - ./db/dashboard/init.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DASH_USER} -d ${POSTGRES_DASH_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # REDIS — Cache + Session
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: topup_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASS}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASS}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # ZOOKEEPER — Kafka dependency
+  # ─────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: topup_zookeeper
+    restart: unless-stopped
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # KAFKA — Event Streaming (main → dashboard)
+  # ─────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: topup_kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - topup_net
+
+  # ─────────────────────────────────────────
+  # KAFKA UI — (dev only, remove in prod)
+  # ─────────────────────────────────────────
+  kafka_ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: topup_kafka_ui
+    restart: unless-stopped
+    profiles: ["dev"]
+    ports:
+      - "8090:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - topup_net

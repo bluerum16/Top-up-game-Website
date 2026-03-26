@@ -1,50 +1,356 @@
-# 🎮 GameTopUp Platform — Database Schema
+# 🎮 GameTopUp Platform
 
-> PostgreSQL 15+ database schema for a game top-up marketplace inspired by Itemku.
-> Includes full e-commerce flow, Midtrans payment integration (sandbox & production),
-> Publisher API integration, and ML-powered behavioral tracking.
+> Marketplace top-up game terinspirasi Itemku. Full-stack monorepo dengan arsitektur
+> dual-database, event streaming via Kafka, dan ML behavioral tracking.
+
+[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go)](https://golang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql)](https://postgresql.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docker.com)
+[![Kafka](https://img.shields.io/badge/Kafka-7.5-231F20?logo=apachekafka)](https://kafka.apache.org)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)](https://python.org)
 
 ---
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
+- [Arsitektur Sistem](#arsitektur-sistem)
 - [Tech Stack](#tech-stack)
+- [Struktur Project](#struktur-project)
+- [Setup Development](#setup-development)
+- [Setup VPS Production](#setup-vps-production)
+- [Kafka: Dual Database](#kafka-dual-database)
 - [Business Logic](#business-logic)
 - [Database Relations](#database-relations)
 - [Feature Breakdown](#feature-breakdown)
 - [ML Tracking System](#ml-tracking-system)
 - [Payment Integration (Midtrans)](#payment-integration-midtrans)
 - [Publisher API Integration](#publisher-api-integration)
-- [Getting Started](#getting-started)
 - [Useful Queries](#useful-queries)
 
 ---
 
-## Overview
+## Arsitektur Sistem
 
-Platform ini adalah marketplace top-up game yang memungkinkan:
-- **Buyer** membeli top-up, item, akun, gift card, dan voucher game
-- **Seller** membuka toko dan menjual produk mereka sendiri
-- **Admin** mengelola platform, publisher API, dan payout
+```
+VPS (Ubuntu 22.04)
+└── Docker Compose
+    ├── Nginx              → Reverse proxy, SSL, routing
+    ├── frontend           → Next.js 14 + Tailwind (user site)
+    ├── dashboard          → Next.js 14 + Tailwind (admin)
+    ├── backend            → Golang + Gin (REST API)
+    ├── ml_service         → Python + FastAPI (ML & recommendations)
+    ├── kafka              → Event streaming main DB → dashboard DB
+    ├── zookeeper          → Kafka dependency
+    ├── postgres_main      → Database utama (38 tabel)
+    ├── postgres_dashboard → Database analytics/dashboard
+    └── redis              → Cache + session storage
+```
 
-Schema dirancang untuk skala produksi dengan 37 tabel, partisi untuk tabel ML bervolume tinggi, dan integrasi dua environment (sandbox & production) untuk payment dan publisher API.
+**Kenapa dual database + Kafka?**
+Database utama (`postgres_main`) menangani semua transaksi live — order, payment, user, top-up. Database dashboard (`postgres_dashboard`) khusus untuk analytics dan reporting. Dengan memisahkan keduanya, query berat dari dashboard tidak mengganggu performa transaksi live. Kafka menjadi jembatan: setiap event penting di main DB dikirim sebagai message ke Kafka, lalu dikonsumsi oleh service yang mengupdate dashboard DB.
 
 ---
 
 ## Tech Stack
 
-| Layer | Teknologi |
-|---|---|
-| Database | PostgreSQL 15+ |
-| Extensions | `uuid-ossp`, `pg_trgm`, `btree_gin`, `pgcrypto` |
-| Payment | Midtrans Snap (sandbox & production) |
-| Publisher | Direct API / Aggregator (Digiflazz, UniPin, dll) |
-| ML Pipeline | External (Python/Spark) — data disimpan di DB |
-| Backend | GO/GIN |
-| Frontend | NextJs |
-| Environtment | Docker |
-| Hosting | VPS |
+| Layer | Teknologi | Versi |
+|---|---|---|
+| Frontend (user) | Next.js + Tailwind CSS | 14 / 3.4 |
+| Frontend (admin) | Next.js + Tailwind CSS | 14 / 3.4 |
+| Backend API | Golang + Gin | 1.22 / 1.9 |
+| ML Service | Python + FastAPI | 3.11 / 0.110 |
+| Database utama | PostgreSQL | 15 |
+| Database dashboard | PostgreSQL | 15 |
+| Cache / Session | Redis | 7 |
+| Event streaming | Apache Kafka | 7.5 (Confluent) |
+| Reverse proxy | Nginx | Alpine |
+| Container | Docker + Docker Compose | 25+ |
+| Hosting | VPS (Ubuntu 22.04) | — |
+| Payment | Midtrans Snap | sandbox & production |
+| Publisher | Direct API / Aggregator | — |
+| ML Libraries | scikit-learn, pandas, numpy | — |
+
+---
+
+## Struktur Project
+
+```
+topup-platform/
+├── docker-compose.yml
+├── .env.example
+├── .env                     ← jangan di-commit!
+│
+├── nginx/
+│   ├── nginx.conf
+│   └── ssl/                 ← SSL certificates
+│
+├── backend/                 ← Golang + Gin
+│   ├── cmd/api/main.go
+│   ├── internal/
+│   │   ├── config/
+│   │   ├── database/        ← koneksi postgres, redis
+│   │   ├── kafka/           ← producer
+│   │   ├── router/
+│   │   ├── middleware/      ← JWT, CORS, rate limit
+│   │   ├── handler/         ← HTTP handlers per domain
+│   │   ├── service/         ← business logic
+│   │   └── repository/      ← DB queries (pgx)
+│   ├── pkg/
+│   │   ├── midtrans/
+│   │   ├── publisher/
+│   │   └── mailer/          ← SMTP
+│   ├── Dockerfile
+│   └── go.mod
+│
+├── frontend/                ← Next.js + Tailwind
+│   ├── app/
+│   │   ├── page.tsx
+│   │   ├── game/[slug]/
+│   │   ├── order/
+│   │   └── contact/
+│   ├── components/
+│   ├── tailwind.config.ts
+│   ├── Dockerfile
+│   └── package.json
+│
+├── dashboard/               ← Next.js + Tailwind (admin)
+│   ├── app/
+│   │   ├── dashboard/
+│   │   ├── orders/
+│   │   ├── games/
+│   │   ├── users/
+│   │   └── contacts/
+│   ├── Dockerfile
+│   └── package.json
+│
+├── ml_service/              ← Python + FastAPI
+│   ├── main.py
+│   ├── routers/
+│   ├── services/
+│   ├── kafka/               ← consumer
+│   ├── models/              ← trained .pkl files
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+└── db/
+    ├── main/
+    │   ├── init.sql         ← schema utama (38 tabel)
+    │   └── contact_emails.sql
+    └── dashboard/
+        └── init.sql         ← dashboard schema (8 tabel)
+```
+
+---
+
+## Setup Development
+
+### 1. Prerequisites
+
+```bash
+# Install Docker & Docker Compose
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verifikasi
+docker --version          # Docker 25+
+docker compose version    # v2.24+
+```
+
+### 2. Clone & Configure
+
+```bash
+git clone https://github.com/yourusername/topup-platform.git
+cd topup-platform
+
+cp .env.example .env
+nano .env
+```
+
+Isi minimal ini di `.env`:
+
+```env
+APP_ENV=development
+JWT_SECRET=ganti_dengan_random_string_panjang_min_32_karakter
+POSTGRES_MAIN_PASS=password_kuat_1
+POSTGRES_DASH_PASS=password_kuat_2
+REDIS_PASS=password_redis
+MIDTRANS_ENV=sandbox
+MIDTRANS_SERVER_KEY=SB-Mid-server-xxxx
+MIDTRANS_CLIENT_KEY=SB-Mid-client-xxxx
+```
+
+### 3. Jalankan semua service
+
+```bash
+# Development mode (termasuk Kafka UI di port 8090)
+docker compose --profile dev up -d
+
+# Cek semua container
+docker compose ps
+```
+
+Output yang diharapkan:
+
+```
+NAME                  STATUS
+topup_nginx           Up
+topup_frontend        Up
+topup_dashboard       Up
+topup_backend         Up (healthy)
+topup_ml              Up
+topup_pg_main         Up (healthy)
+topup_pg_dashboard    Up (healthy)
+topup_redis           Up (healthy)
+topup_kafka           Up
+topup_zookeeper       Up
+topup_kafka_ui        Up   ← dev only, akses di localhost:8090
+```
+
+### 4. Verifikasi endpoint
+
+```bash
+curl http://localhost:8080/health    # → {"status":"ok"}
+curl http://localhost:8000/health    # → {"status":"ok"}
+
+# Buka di browser
+# http://localhost:3000        → frontend user
+# http://localhost:3001        → dashboard admin (atau subdomain admin.)
+# http://localhost:8090        → Kafka UI
+```
+
+### 5. Reset database
+
+```bash
+# Hapus semua data dan mulai dari awal
+docker compose down -v
+docker compose up -d
+```
+
+---
+
+## Setup VPS Production
+
+### 1. Persiapan server
+
+```bash
+# Update & install Docker
+sudo apt update && sudo apt upgrade -y
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Install Certbot
+sudo apt install certbot -y
+```
+
+### 2. Point domain ke IP VPS
+
+Tambahkan DNS records di provider domain kamu:
+
+```
+A    yourdomain.com        → IP_VPS
+A    www.yourdomain.com    → IP_VPS
+A    admin.yourdomain.com  → IP_VPS
+```
+
+### 3. Generate SSL (Let's Encrypt gratis)
+
+```bash
+sudo certbot certonly --standalone \
+  -d yourdomain.com \
+  -d www.yourdomain.com \
+  -d admin.yourdomain.com
+
+sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem nginx/ssl/
+sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem   nginx/ssl/
+sudo chown $USER:$USER nginx/ssl/*
+```
+
+### 4. Konfigurasi production
+
+```bash
+nano .env
+```
+
+```env
+APP_ENV=production
+MIDTRANS_ENV=production
+MIDTRANS_SERVER_KEY=Mid-server-xxxx     # key production (tanpa SB-)
+MIDTRANS_CLIENT_KEY=Mid-client-xxxx
+PUBLISHER_ENV=production
+```
+
+### 5. Build & deploy
+
+```bash
+# Production (Kafka UI tidak ikut jalan)
+docker compose up -d --build
+
+docker compose ps    # semua harus Up
+```
+
+### 6. Auto-renew SSL (cron)
+
+```bash
+crontab -e
+# Tambahkan baris ini:
+0 3 * * * certbot renew --quiet && \
+  cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem /path/project/nginx/ssl/ && \
+  cp /etc/letsencrypt/live/yourdomain.com/privkey.pem /path/project/nginx/ssl/ && \
+  docker compose -f /path/project/docker-compose.yml restart nginx
+```
+
+### 7. Perintah maintenance VPS
+
+```bash
+# Restart satu service
+docker compose restart backend
+
+# Lihat log real-time
+docker compose logs -f backend
+docker compose logs -f kafka
+
+# Update setelah git pull
+git pull
+docker compose up -d --build backend frontend dashboard ml_service
+
+# Backup database
+docker exec topup_pg_main pg_dump \
+  -U topup_user gametopup_main > backup_main_$(date +%Y%m%d).sql
+
+docker exec topup_pg_dashboard pg_dump \
+  -U dash_user gametopup_dashboard > backup_dash_$(date +%Y%m%d).sql
+```
+
+---
+
+## Kafka: Dual Database
+
+Kafka menghubungkan `postgres_main` dan `postgres_dashboard` secara async.
+
+```
+Go Backend (producer)
+    │
+    ├── order sukses    ──▶ topup.orders    ──▶ Dashboard consumer → dash_revenue_daily
+    ├── payment settle  ──▶ topup.payments  ──▶ Dashboard consumer → dash_payment_stats_daily
+    ├── user baru       ──▶ topup.users     ──▶ Dashboard consumer → dash_user_growth_daily
+    ├── page view       ──▶ topup.pageviews ──▶ ML consumer (Python) → ml_page_views
+    ├── search event    ──▶ topup.search    ──▶ ML consumer (Python) → ml_search_events
+    └── contact form    ──▶ topup.contacts  ──▶ Go consumer → SMTP email ke admin
+```
+
+### Kafka Topics
+
+| Topic | Producer | Consumer | Tujuan |
+|---|---|---|---|
+| `topup.orders` | Go | Dashboard svc | Revenue stats |
+| `topup.payments` | Go | Dashboard svc | Payment breakdown |
+| `topup.users` | Go | Dashboard svc | User growth |
+| `topup.pageviews` | Go | Python ML | ml_page_views |
+| `topup.search` | Go | Python ML | ml_search_events |
+| `topup.contacts` | Go | Go mailer | Email notif admin |
 
 ---
 
@@ -58,460 +364,163 @@ User buka game page
         ▼
 Input Player ID + Server ID
         │
-        ▼ (hit publisher verify API, cached 24 jam)
-Tampilkan nama akun game user
+        ▼  (verify API publisher → cached Redis 24 jam)
+Tampilkan nama akun game
         │
         ▼
-Pilih nominal (product_variant)
-        │
-        ▼
-Pilih metode pembayaran
+Pilih nominal + metode bayar
         │
         ▼
 Buat order (status: pending)
         │
-        ▼ (Midtrans create transaction → dapat snap_token)
-User bayar di halaman Midtrans
+        ▼  (Gin → Midtrans create transaction → snap_token)
+User bayar di Midtrans Snap popup
         │
-        ▼ (Midtrans kirim webhook ke server)
-Verifikasi signature webhook
+        ▼  (Midtrans webhook POST → Gin handler)
+Verifikasi HMAC signature
         │
-        ▼ (order status: paid → processing)
-Server kirim request ke Publisher API
+        ▼  order: paid → processing
+        │  Kafka produce → topup.orders
+Go → Publisher API
         │
-        ├─── sukses ──▶ order status: success
-        │                    │
-        │                    ▼
-        │             ml_user_topup_affinity terupdate (trigger)
+        ├── sukses → order: success
+        │                 │
+        │                 ▼
+        │           ml_user_topup_affinity += 1 (DB trigger)
+        │           Kafka → dashboard consumer
         │
-        └─── gagal  ──▶ order status: failed → refund otomatis
+        └── gagal  → order: failed → refund
 ```
-
-### Model Bisnis Multi-Seller
-
-Platform menggunakan model **marketplace** dimana:
-
-1. **Platform products** — produk yang dikelola langsung oleh admin (seller_id = NULL), terhubung langsung ke Publisher API
-2. **Seller products** — produk yang didaftarkan seller independen, harga kompetitif antar seller untuk produk game yang sama
-3. **Margin** dihitung dari `price` (harga jual) vs `cost_price` (COGS/harga beli dari publisher) di tabel `product_variants`
 
 ### Order Status Flow
 
 ```
-pending
-    │
-    ▼
-awaiting_payment ──(expired)──▶ expired
-    │
-    ▼ (webhook settlement)
-paid
-    │
-    ▼
-processing ──(publisher error)──▶ failed ──▶ refunded
-    │
-    ▼
-success
+pending → awaiting_payment → paid → processing → success
+                │                       │
+                ▼                       ▼
+             expired                  failed → refunded
 ```
 
-Setiap perubahan status dicatat otomatis di `order_status_logs` via trigger.
+### Contact Email Flow
 
-### Voucher & Diskon
-
-- Voucher bisa bersifat **global** (semua game) atau **spesifik per game**
-- Bisa dibatasi per user tertentu atau publik
-- Tipe diskon: **persentase** atau **nominal tetap**
-- `max_discount` membatasi nilai diskon maksimum untuk tipe persentase
-- Penggunaan dicatat di `voucher_usages` (UNIQUE per order, mencegah double pakai)
+```
+User isi form → POST /api/contact (Gin)
+    → INSERT contact_emails
+    → Kafka topup.contacts
+    → Go consumer → SMTP → email notif ke admin
+```
 
 ---
 
 ## Database Relations
 
-### Diagram Relasi Utama
-
 ```
 users
- ├── user_sessions        (1:N) — device & browser tracking
- ├── user_addresses       (1:N)
- ├── user_wallets         (1:1) — saldo platform
+ ├── user_sessions        (1:N)
+ ├── user_wallets         (1:1)
  │    └── wallet_transactions (1:N)
- ├── sellers              (1:1) — jika user jadi seller
- └── orders               (1:N)
+ ├── sellers              (1:1)
+ ├── orders               (1:N)
+ └── contact_emails       (1:N) — nullable
 
 games
  ├── categories           (N:1)
- ├── game_tags            (1:N)
- ├── game_topup_config    (1:1) — field dinamis per game (Player ID, Server ID, dll)
+ ├── game_topup_config    (1:1)
  ├── products             (1:N)
- │    ├── product_variants    (1:N) — setiap nominal/denomination
- │    ├── product_images      (1:N)
- │    └── product_reviews     (1:N)
- └── publisher_integrations  (1:N, per env)
-      └── publisher_product_mapping (1:N) — mapping SKU ke kode publisher
+ │    └── product_variants (1:N)
+ └── publisher_integrations (1:N per env)
+      └── publisher_product_mapping (1:N)
 
 orders
- ├── users                (N:1)
- ├── products             (N:1)
- ├── product_variants     (N:1)
- ├── payment_transactions (1:1)
- ├── order_status_logs    (1:N) — audit trail status
- ├── publisher_api_logs   (1:N) — setiap request ke publisher
- └── publisher_delivery_status (1:1) — untuk publisher async
+ ├── payment_transactions (1:1) — Midtrans data
+ ├── order_status_logs    (1:N) — trigger otomatis
+ └── publisher_api_logs   (1:N)
+
+postgres_main ──[Kafka]──▶ postgres_dashboard
 ```
 
-### Tabel Kunci & Foreign Keys
+### Tabel Kunci
 
 | Tabel | FK Utama | Keterangan |
 |---|---|---|
 | `orders` | `user_id`, `product_id`, `variant_id` | Inti transaksi |
-| `payment_transactions` | `order_id` | 1:1 dengan order |
-| `product_variants` | `product_id` | Varian/nominal per produk |
+| `payment_transactions` | `order_id` | 1:1, field Midtrans lengkap |
 | `publisher_product_mapping` | `variant_id`, `integration_id` | Mapping SKU |
-| `publisher_api_logs` | `order_id`, `integration_id` | Log setiap API call |
-| `ml_user_topup_affinity` | `user_id`, `game_id`, `variant_id` | UNIQUE constraint |
-| `voucher_usages` | `voucher_id`, `order_id` | UNIQUE, cegah double pakai |
+| `ml_user_topup_affinity` | `user_id`, `game_id`, `variant_id` | UNIQUE, auto-update |
+| `contact_emails` | `user_id?`, `order_id?` | Form contact |
 
 ---
 
 ## Feature Breakdown
 
 ### 👤 Users & Auth
-
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Registrasi & login | `users` | Email + phone, password bcrypt |
-| Multi-device session | `user_sessions` | IP, user-agent, device type, OS |
-| Verifikasi email/phone | `users` | `email_verified_at`, `phone_verified_at` |
-| Referral system | `users` | `referral_code`, `referred_by` |
-| Saldo/wallet | `user_wallets` | Balance + locked amount |
-| Histori wallet | `wallet_transactions` | Debit/credit/hold/release |
-| Alamat | `user_addresses` | Multi-alamat, default flag |
+Registrasi/login email+phone, JWT+Redis session, verifikasi email/phone, referral system, saldo/wallet, multi-alamat.
 
 ### 🎮 Games & Produk
-
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Katalog game | `games` | Multi-platform, multi-genre |
-| Kategori | `categories` | Hierarki flat |
-| Tag game | `game_tags` | "popular", "new", "sale" |
-| Multi-tipe produk | `products` | top_up, item, account, gift_card, dll |
-| Varian/nominal | `product_variants` | Tiap nominal = 1 baris, ada `cost_price` |
-| Galeri gambar | `product_images` | Multiple images per produk |
-| Review terverifikasi | `product_reviews` | `is_verified` = hanya pembeli yang bisa review |
-| Multi-seller | `sellers` | Rating, total_sales, verified badge |
+Katalog multi-platform, multi-tipe produk (top_up, item, account, gift_card, dll), varian/nominal dengan `cost_price` untuk tracking margin, multi-seller marketplace, review untuk pembeli terverifikasi saja.
 
 ### 🔑 Top-Up Specific
-
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Form dinamis per game | `game_topup_config` | JSONB fields config (Player ID, Server ID, dll) |
-| Verifikasi Player ID | `player_id_cache` | Cache 24 jam, hindari spam publisher API |
-
-**Contoh `game_topup_config.fields`:**
-```json
-[
-  {"key": "player_id", "label": "Player ID", "type": "text", "required": true},
-  {"key": "server_id", "label": "Server", "type": "select", "required": true,
-   "options": [{"label": "Asia", "value": "1"}, {"label": "North America", "value": "2"}]}
-]
-```
+Form dinamis per game via JSONB config. Verifikasi Player ID real-time di-cache Redis 24 jam.
 
 ### 📦 Orders
+9 status dengan audit trail otomatis (trigger). Auto-generate order number `TXN-YYYYMMDD-XXXXXXXX`. Voucher persentase/fixed per-game atau per-user.
 
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Order management | `orders` | Lengkap dengan pricing breakdown |
-| Status tracking | `orders` | 9 status: pending → success/failed/refunded |
-| Audit trail status | `order_status_logs` | Trigger otomatis setiap status berubah |
-| Auto order number | Trigger | Format `TXN-20240301-XXXXXXXX` |
-| Voucher | `vouchers`, `voucher_usages` | Persentase/fixed, per-game, per-user |
+### ✉️ Contact Email
+Form kontak dengan 5 kategori, assignment ke admin, status penanganan, notifikasi SMTP via Kafka.
 
-### 🔔 Notifikasi
+### 📊 Dashboard (database terpisah)
+Revenue harian/bulanan, game performance, payment breakdown, user growth, search trends, order funnel — semua diisi via Kafka dari main DB.
 
-| Fitur | Tabel | Detail |
-|---|---|---|
-| In-app notifications | `notifications` | Order success/failed, promo, system |
-| Read tracking | `notifications` | `is_read`, `read_at` |
-
-### 💰 Seller Payout
-
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Payout management | `seller_payouts` | Bank transfer, status tracking |
-
-### 🔍 Audit
-
-| Fitur | Tabel | Detail |
-|---|---|---|
-| Full audit log | `audit_logs` | Semua aksi penting tercatat + IP |
+### 🤖 ML Recommendations
+Rekomendasi personalisasi, trending games, autocomplete search — diproses Python FastAPI dan disimpan di main DB.
 
 ---
 
 ## ML Tracking System
 
-Sistem ML dirancang untuk menjawab tiga pertanyaan bisnis:
+| Pertanyaan | Tabel Raw | Tabel Agregat | Update |
+|---|---|---|---|
+| Apa yang sering diketik? | `ml_search_events` | `ml_search_aggregates` | Daily job (Python) |
+| Top-up apa yang sering dilakukan? | — | `ml_user_topup_affinity` | DB Trigger (otomatis) |
+| Game mana yang sering dibuka? | `ml_page_views` | `ml_game_popularity` | Daily job (Python) |
 
-### 1. Orang lebih sering mengetik apa?
-
-**Tabel:** `ml_search_events` → diproses ke `ml_search_aggregates`
-
-```
-User mengetik di search bar
-        │
-        ▼
-ml_search_events (raw, setiap keystroke/submit)
-  - query text
-  - apakah hasil di-klik? (clicked_result)
-  - posisi klik (clicked_position)
-  - context: homepage/game_page/global
-        │
-        ▼ (scheduled job harian)
-ml_search_aggregates (agregat per hari)
-  - total_searches
-  - unique_users
-  - conversion (led to purchase)
-        │
-        ▼
-ml_search_suggestions (autocomplete, pre-computed ML)
-  - fuzzy match via pg_trgm
-```
-
-**Query autocomplete (pg_trgm):**
-```sql
-SELECT query_normalized, total_searches
-FROM ml_search_aggregates
-WHERE query_normalized % 'mobile leg'   -- similarity match
-   OR query_normalized ILIKE 'mobile leg%'
-ORDER BY total_searches DESC
-LIMIT 8;
-```
-
-### 2. Orang lebih sering melakukan top-up apa?
-
-**Tabel:** `ml_user_topup_affinity` — **diupdate otomatis via trigger** setiap order berhasil
-
-```sql
--- Trigger fn_update_topup_affinity() otomatis jalan
--- ketika order.status berubah menjadi 'success'
-INSERT INTO ml_user_topup_affinity (user_id, game_id, variant_id, ...)
-ON CONFLICT DO UPDATE SET
-    purchase_count = purchase_count + 1,
-    total_spent    = total_spent + amount;
-```
-
-Data ini digunakan untuk:
-- **Upsell**: "Kamu biasa beli 100 Diamond, mau coba 500?"
-- **Rekomendasi**: "User seperti kamu sering beli ini"
-- **Email marketing**: segmentasi berdasarkan game favorit
-
-### 3. Orang lebih sering buka top-up game yang mana?
-
-**Tabel:** `ml_page_views` → diproses ke `ml_game_popularity`
-
-```
-ml_page_views (raw events)
-  - page_type: 'game', 'product', 'home'
-  - referrer_type: search/banner/direct/social
-  - time_on_page_ms
-  - scroll_depth (0–100%)
-        │
-        ▼ (ML pipeline harian)
-ml_game_popularity
-  - popularity_score (computed)
-  - trend_direction: 'up'/'down'/'stable'
-        │
-        ▼
-ml_recommendations
-  - personalized per user
-  - trending global
-  - similar games
-```
-
-### ML Tables Summary
-
-| Tabel | Fungsi | Update Frequency |
-|---|---|---|
-| `ml_search_events` | Raw search log | Real-time |
-| `ml_page_views` | Raw page view log | Real-time |
-| `ml_user_events` | Raw click/hover/cart | Real-time |
-| `ml_user_topup_affinity` | Frekuensi top-up per user | Trigger (auto) |
-| `ml_search_aggregates` | Agregat pencarian harian | Scheduled (daily) |
-| `ml_game_popularity` | Skor popularitas game | Scheduled (daily) |
-| `ml_recommendations` | Output model ML | Scheduled (6 jam) |
-| `ml_search_suggestions` | Autocomplete suggestions | Scheduled (harian) |
-
-### Pre-built Views
-
-```sql
--- Top pencarian minggu ini
-SELECT * FROM v_top_searches_7d LIMIT 10;
-
--- Game trending bulan ini
-SELECT * FROM v_trending_games LIMIT 10;
-
--- Game favorit seorang user
-SELECT * FROM v_user_favorite_games WHERE user_id = '<uuid>';
-
--- Nominal yang sering dibeli user
-SELECT * FROM v_user_favorite_variants WHERE user_id = '<uuid>';
-```
+Output model disimpan di `ml_recommendations` dan `ml_search_suggestions`, di-serve oleh Python FastAPI ke Go backend.
 
 ---
 
 ## Payment Integration (Midtrans)
 
-### Dua Environment
-
-```sql
--- Config tersimpan di payment_gateway_config
--- sandbox  → https://api.sandbox.midtrans.com
--- production → https://api.midtrans.com
-```
-
 ### Flow Midtrans Snap
 
 ```
-1. Backend buat transaksi → POST /v1/transactions (Midtrans API)
-   Payload: order_id, gross_amount, customer_details, item_details
-
-2. Midtrans return snap_token + redirect_url
-   → disimpan di payment_transactions.snap_token
-
-3. Frontend load Snap.js dengan snap_token
-   → popup halaman bayar Midtrans
-
-4. User bayar (QRIS / e-wallet / VA / kartu)
-
-5. Midtrans kirim webhook POST ke endpoint kamu
-   → disimpan di payment_transactions.raw_notification
-
-6. Verifikasi signature:
-   SHA512( order_id + status_code + gross_amount + server_key )
-   → payment_transactions.signature_verified = true
-
-7. Update order status → paid → proses top-up ke publisher
+1. POST /api/order       → Gin buat order + hit Midtrans API → dapat snap_token
+2. Frontend load Snap.js → popup bayar
+3. User bayar (QRIS / e-wallet / VA / kartu)
+4. Midtrans POST webhook → /webhook/midtrans (Gin)
+5. Gin verifikasi: SHA512(order_id + status_code + gross_amount + server_key)
+6. Update order → proses top-up ke publisher
 ```
 
-### Field Midtrans di `payment_transactions`
+### Ganti Environment
 
-| Field | Keterangan |
-|---|---|
-| `midtrans_order_id` | Order ID yang dikirim ke Midtrans |
-| `snap_token` | Token untuk Snap.js popup |
-| `transaction_status` | `settlement`, `capture`, `pending`, `expire`, `cancel` |
-| `fraud_status` | `accept`, `challenge`, `deny` |
-| `va_number` | Nomor Virtual Account |
-| `qr_code_url` | URL QR Code untuk QRIS |
-| `raw_notification` | Full JSON payload dari webhook |
-| `signature_verified` | Boolean hasil verifikasi HMAC |
-| `env` | `sandbox` / `production` |
-
-### Mengganti Environment
-
-Cukup ubah satu kolom di `orders`:
-```sql
--- Development / testing
-UPDATE orders SET payment_env = 'sandbox' WHERE id = '<order_id>';
-
--- Production
-UPDATE orders SET payment_env = 'production' WHERE id = '<order_id>';
+```env
+MIDTRANS_ENV=sandbox      # development
+MIDTRANS_ENV=production   # live
 ```
 
-Backend membaca config dari `payment_gateway_config` berdasarkan `env` ini.
+Backend otomatis membaca config dari tabel `payment_gateway_config` berdasarkan nilai ini.
 
 ---
 
 ## Publisher API Integration
 
-### Dua Model Integrasi
+**Direct API** — daftar ke Garena/Moonton/Supercell. Margin besar, butuh verifikasi bisnis.
 
-**1. Direct API** — daftar langsung ke publisher game (Garena, Moonton, Supercell)
-- Margin lebih besar
-- Perlu verifikasi bisnis & deposit
-- Cocok untuk game populer dengan volume tinggi
-
-**2. Aggregator** — via Digiflazz, UniPin, VIP Reseller, Codashop API
-- Setup cepat, ratusan produk sekaligus
-- Margin lebih kecil
-- Direkomendasikan untuk MVP / tahap awal
-
-### Config per Game per Environment
-
-```sql
-INSERT INTO publisher_integrations
-  (game_id, env, provider, api_key, base_url, auth_type, is_async)
-VALUES
-  ('<game_uuid>', 'sandbox',    'digiflazz', 'xxx', 'https://api.digiflazz.com', 'hmac', false),
-  ('<game_uuid>', 'production', 'garena',    'xxx', 'https://api.garena.com',    'hmac', false);
-```
-
-### Mapping SKU
-
-```sql
-INSERT INTO publisher_product_mapping
-  (variant_id, integration_id, publisher_product_id, publisher_price)
-VALUES
-  ('<variant_uuid>', '<integration_uuid>', 'ML-86-DIAMOND', 14000);
---   ^ variant "86 Diamond" kamu       ^ kode produk di publisher ^ harga beli
-```
-
-### Retry & Async Support
-
-- `max_retries` — berapa kali retry jika publisher API timeout
-- `is_async = true` — publisher tidak langsung return sukses/gagal; sistem polling via `publisher_delivery_status`
-- Semua request dicatat di `publisher_api_logs` beserta latency (`response_ms`) dan nomor attempt
-
----
-
-## Getting Started
-
-### Prerequisites
-
-```bash
-PostgreSQL 15+
-psql atau client GUI (DBeaver, TablePlus, pgAdmin)
-```
-
-### Setup
-
-```bash
-# 1. Buat database
-createdb gametopup_db
-
-# 2. Jalankan schema
-psql -d gametopup_db -f topup_schema.sql
-
-# 3. Verifikasi
-psql -d gametopup_db -c "\dt"
-# Harus muncul 37 tabel
-```
-
-### Konfigurasi Midtrans Sandbox
-
-```sql
--- Ganti dengan Midtrans Sandbox keys kamu
--- Dashboard: https://dashboard.sandbox.midtrans.com
-UPDATE payment_gateway_config
-SET
-  server_key = 'SB-Mid-server-XXXXXXXXXXXXXXXXXXXXXXXX',
-  client_key = 'SB-Mid-client-XXXXXXXXXXXXXXXXXXXXXXXX'
-WHERE env = 'sandbox';
-```
-
-### Environment Variables (rekomendasi backend)
+**Aggregator** — via Digiflazz/UniPin/Codashop API. Setup cepat, cocok untuk MVP.
 
 ```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=gametopup_db
-DB_USER=postgres
-DB_PASS=yourpassword
-
-MIDTRANS_ENV=sandbox
-MIDTRANS_SERVER_KEY=SB-Mid-server-xxx
-MIDTRANS_CLIENT_KEY=SB-Mid-client-xxx
-
-PUBLISHER_ENV=sandbox
+PUBLISHER_ENV=sandbox      # pakai sandbox aggregator
+PUBLISHER_ENV=production   # pakai publisher live
 ```
 
 ---
@@ -519,29 +528,22 @@ PUBLISHER_ENV=sandbox
 ## Useful Queries
 
 ```sql
--- 10 pencarian terpopuler minggu ini
-SELECT query, total_searches, conversion_rate
-FROM v_top_searches_7d
-LIMIT 10;
+-- Top 10 pencarian minggu ini
+SELECT * FROM v_top_searches_7d LIMIT 10;
 
 -- Game trending bulan ini
-SELECT name, page_views, total_orders, trend
-FROM v_trending_games
-LIMIT 10;
+SELECT * FROM v_trending_games LIMIT 10;
 
--- Riwayat top-up seorang user
-SELECT game_name, total_purchases, total_spent
-FROM v_user_favorite_games
-WHERE user_id = '<user_uuid>';
+-- Favorite games seorang user
+SELECT * FROM v_user_favorite_games WHERE user_id = '<uuid>';
 
 -- Monitor transaksi Midtrans sandbox
 SELECT o.order_number, o.total_amount, pt.payment_type,
-       pt.transaction_status, pt.env, pt.created_at
+       pt.transaction_status, pt.created_at
 FROM payment_transactions pt
 JOIN orders o ON o.id = pt.order_id
 WHERE pt.env = 'sandbox'
-ORDER BY pt.created_at DESC
-LIMIT 50;
+ORDER BY pt.created_at DESC LIMIT 50;
 
 -- Revenue per game bulan ini
 SELECT g.name, COUNT(o.id) AS orders, SUM(o.total_amount) AS revenue
@@ -550,20 +552,18 @@ JOIN products p ON p.id = o.product_id
 JOIN games g ON g.id = p.game_id
 WHERE o.status = 'success'
   AND o.created_at >= DATE_TRUNC('month', NOW())
-GROUP BY g.name
-ORDER BY revenue DESC;
+GROUP BY g.name ORDER BY revenue DESC;
 
--- Konversi gap: user sering lihat tapi tidak pernah beli
-SELECT pv.game_id, g.name, COUNT(*) AS views, COUNT(DISTINCT o.id) AS purchases
-FROM ml_page_views pv
-JOIN games g ON g.id = pv.game_id
-LEFT JOIN orders o
-  ON o.user_id = pv.user_id
-  AND o.product_id IN (SELECT id FROM products WHERE game_id = pv.game_id)
-  AND o.status = 'success'
-WHERE pv.user_id = '<user_uuid>'
-GROUP BY pv.game_id, g.name
-HAVING COUNT(DISTINCT o.id) = 0;
+-- Contact emails belum dibalas
+SELECT name, email, subject, category, created_at
+FROM contact_emails
+WHERE status IN ('new', 'read')
+ORDER BY created_at ASC;
+
+-- Dashboard: Revenue hari ini (dari dashboard DB)
+SELECT gross_revenue, net_revenue, total_orders, success_orders
+FROM dash_revenue_daily
+WHERE date = CURRENT_DATE;
 ```
 
 ---
@@ -572,22 +572,23 @@ HAVING COUNT(DISTINCT o.id) = 0;
 
 | Kategori | Jumlah |
 |---|---|
-| Total tabel | 37 |
-| Total index | 30+ |
+| Tabel main DB | 38 (37 + contact_emails) |
+| Tabel dashboard DB | 8 |
+| Indexes | 35+ |
 | Views | 4 |
-| Triggers | 8 |
-| Custom functions | 4 |
-| ENUM types | 11 |
+| Triggers | 9 |
+| Kafka topics | 6 |
+| Docker services | 10 |
 
 ---
 
 ## Roadmap
 
-- [ ] Table partitioning untuk `ml_search_events` dan `ml_page_views` (> 10M rows)
-- [ ] `pgvector` extension untuk embedding-based recommendations
-- [ ] Read replica config untuk ML query workload
+- [ ] Table partitioning `ml_search_events` & `ml_page_views` (> 10M rows)
+- [ ] `pgvector` untuk embedding-based recommendations
+- [ ] GitHub Actions CI/CD → VPS via SSH
+- [ ] Prometheus + Grafana untuk monitoring
 - [ ] Row-level security (RLS) untuk seller isolation
-- [ ] TimescaleDB untuk time-series analytics
 
 ---
 
