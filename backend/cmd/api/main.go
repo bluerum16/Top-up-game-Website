@@ -1,17 +1,14 @@
 package main
 
 import (
-	"net/http"
-
-	"github.com/gin-gonic/gin"
+	"github.com/irham/topup-backend/config"
+	"github.com/irham/topup-backend/database"
+	"github.com/irham/topup-backend/router"
 )
 
 func main() {
-    r := gin.Default()
-
-    r.GET("/health", func(c *gin.Context) {
-        c.JSON(http.StatusOK, gin.H{"status": "ok"})
-    })
-
-    r.Run(":8080") // port sesuai expose di docker
+    conf := config.Setupconf()
+    r := router.SetupRouter()
+    database.ConnectDB(conf)
+    r.Run(":8080")
 }
