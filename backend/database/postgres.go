@@ -1,14 +1,16 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 
 	"github.com/irham/topup-backend/config"
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-var DB *sql.DB
+var DB *pgxpool.Pool
 
 func ConnectDB(conf config.Config) {
 	conn := fmt.Sprintf(
@@ -21,14 +23,9 @@ func ConnectDB(conf config.Config) {
 	)
 	var err error
 
-	DB, err := sql.Open("postgres", conn)
+	DB, err = pgxpool.New(context.Background(), conn)
 	if err != nil {
 		log.Fatal("Failed connect: ", err)
-	}
-
-	err = DB.Ping()
-	if err != nil {
-		log.Fatal("DB error: ", err)
 	}
 
 	log.Println("Connected to DB")
