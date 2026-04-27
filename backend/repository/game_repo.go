@@ -18,11 +18,6 @@ func NewGameRepo(db *pgxpool.Pool) *GameRepo {
 	return &GameRepo{db: db}
 }
 
-// ─────────────────────────────────────────────────────────────────
-// GAMES
-// ─────────────────────────────────────────────────────────────────
-
-// ListGames — semua game aktif, dipakai di halaman utama
 func (r *GameRepo) ListGames(ctx context.Context) ([]model.Game, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
